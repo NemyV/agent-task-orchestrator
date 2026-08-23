@@ -13,5 +13,8 @@ class DeterministicVerifier:
             return VerificationResult(False, "verification failed: execution produced no output")
         normalized_goal = " ".join(goal.split())
         if normalized_goal not in output:
-            return VerificationResult(False, "verification failed: output did not reference bounded goal")
+            return VerificationResult(
+                False,
+                "verification failed: output did not reference bounded goal",
+            )
         return VerificationResult(True, "verified: output present and bounded goal preserved")
