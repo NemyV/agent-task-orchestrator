@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class JobStatus(StrEnum):
@@ -13,9 +13,16 @@ class JobStatus(StrEnum):
 
 
 class JobCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     goal: str = Field(min_length=5, max_length=500)
     requires_confirmation: bool = True
     idempotency_key: str = Field(min_length=8, max_length=100)
+
+    @field_validator("goal", "idempotency_key", mode="before")
+    @classmethod
+    def strip_text_fields(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
 
 class JobRead(BaseModel):
