@@ -1,10 +1,21 @@
 services:
   api:
     build: .
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql+psycopg://agent:agent@db:5432/agent
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: sh -c "alembic upgrade head && python -m app.worker"
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@db:5432/agent
+      MAX_ATTEMPTS: 3
     depends_on:
       db:
         condition: service_healthy
