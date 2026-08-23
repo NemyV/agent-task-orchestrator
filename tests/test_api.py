@@ -98,6 +98,9 @@ def test_job_without_confirmation_can_run_immediately() -> None:
     assert created.status_code == 201
     assert created.json()["status"] == "pending"
 
+    cannot_confirm = client.post(f"/jobs/{created.json()['id']}/confirm")
+    assert cannot_confirm.status_code == 409
+
     run = client.post(f"/jobs/{created.json()['id']}/run")
     assert run.status_code == 200
     assert run.json()["status"] == "completed"
@@ -139,9 +142,10 @@ def test_input_validation_trims_text_and_rejects_invalid_payloads() -> None:
     assert unknown_field.status_code == 422
 
 
-def test_missing_job_returns_404() -> None:
-    response = client.get("/jobs/does-not-exist")
-    assert response.status_code == 404
+def test_missing_job_endpoints_return_404() -> None:
+    assert client.get("/jobs/does-not-exist").status_code == 404
+    assert client.post("/jobs/does-not-exist/confirm").status_code == 404
+    assert client.post("/jobs/does-not-exist/run").status_code == 404
 
 
 def test_metrics_endpoint_exposes_real_job_counts() -> None:
