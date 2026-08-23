@@ -13,9 +13,14 @@ def reset_database() -> None:
     Base.metadata.create_all(bind=engine)
 
 
-def test_health_and_readiness() -> None:
+def test_root_health_and_readiness() -> None:
+    root = client.get("/")
     health = client.get("/health")
     ready = client.get("/ready")
+
+    assert root.status_code == 200
+    assert root.json()["service"] == "agent-task-orchestrator"
+    assert root.json()["docs"] == "/docs"
     assert health.status_code == 200
     assert health.json() == {"status": "ok"}
     assert ready.status_code == 200
@@ -42,15 +47,43 @@ def test_create_is_idempotent_confirmation_is_required_and_job_can_run() -> None
     assert blocked.status_code == 409
 
     confirmation = client.post(f"/jobs/{job_id}/confirm")
+    repeated_confirmation = client.post(f"/jobs/{job_id}/confirm")
     assert confirmation.status_code == 200
+    assert repeated_confirmation.status_code == 200
     assert confirmation.json()["confirmed"] is True
     assert confirmation.json()["status"] == "pending"
 
     run = client.post(f"/jobs/{job_id}/run")
+    repeated_run = client.post(f"/jobs/{job_id}/run")
     assert run.status_code == 200
+    assert repeated_run.status_code == 200
     assert run.json()["status"] == "completed"
     assert run.json()["attempts"] == 1
+    assert repeated_run.json()["attempts"] == 1
     assert run.json()["verification"].startswith("verified:")
+
+
+def test_reusing_idempotency_key_for_different_request_returns_conflict() -> None:
+    first = client.post(
+        "/jobs",
+        json={
+            "goal": "Inspect the first bounded task",
+            "requires_confirmation": False,
+            "idempotency_key": "shared-key-0001",
+        },
+    )
+    conflict = client.post(
+        "/jobs",
+        json={
+            "goal": "A different task must not reuse the key",
+            "requires_confirmation": False,
+            "idempotency_key": "shared-key-0001",
+        },
+    )
+
+    assert first.status_code == 201
+    assert conflict.status_code == 409
+    assert "different request" in conflict.json()["detail"]
 
 
 def test_job_without_confirmation_can_run_immediately() -> None:
@@ -71,12 +104,34 @@ def test_job_without_confirmation_can_run_immediately() -> None:
     assert run.json()["result"].startswith("Executed bounded task:")
 
 
+def test_input_validation_rejects_short_goal_and_key() -> None:
+    response = client.post(
+        "/jobs",
+        json={
+            "goal": "no",
+            "requires_confirmation": False,
+            "idempotency_key": "short",
+        },
+    )
+    assert response.status_code == 422
+
+
 def test_missing_job_returns_404() -> None:
     response = client.get("/jobs/does-not-exist")
     assert response.status_code == 404
 
 
-def test_metrics_endpoint_is_prometheus_compatible_text() -> None:
+def test_metrics_endpoint_exposes_real_job_counts() -> None:
+    client.post(
+        "/jobs",
+        json={
+            "goal": "Remain pending for metrics",
+            "requires_confirmation": False,
+            "idempotency_key": "metrics-key-0001",
+        },
+    )
+
     response = client.get("/metrics")
     assert response.status_code == 200
     assert "agent_orchestrator_up 1" in response.text
+    assert 'agent_orchestrator_jobs{status="pending"} 1' in response.text
