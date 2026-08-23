@@ -1,7 +1,7 @@
 [project]
 name = "agent-task-orchestrator"
-version = "0.1.0"
-description = "Small production-style FastAPI service demonstrating supervised agent task execution."
+version = "1.0.0"
+description = "Production-style FastAPI service demonstrating supervised and auditable agent task execution."
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115,<1",
@@ -9,6 +9,7 @@ dependencies = [
   "pydantic-settings>=2.7,<3",
   "sqlalchemy>=2.0,<3",
   "psycopg[binary]>=3.2,<4",
+  "alembic>=1.14,<2",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +28,9 @@ addopts = "-q --cov=app --cov-report=term-missing"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
 
 [tool.mypy]
 python_version = "3.12"
