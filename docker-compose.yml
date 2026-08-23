@@ -1,0 +1,38 @@
+services:
+  api:
+    build: .
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@db:5432/agent
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: sh -c "alembic upgrade head && python -m app.worker"
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@db:5432/agent
+      MAX_ATTEMPTS: 3
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: agent
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
