@@ -14,7 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "httpx>=0.28,<1",
+  "httpx2>=2.10,<3",
   "pytest>=8.3,<9",
   "pytest-cov>=6,<7",
   "mypy>=1.14,<2",
