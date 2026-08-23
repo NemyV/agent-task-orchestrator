@@ -27,7 +27,6 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("idempotency_key"),
     )
     op.create_index("ix_jobs_status", "jobs", ["status"])
     op.create_index("ix_jobs_idempotency_key", "jobs", ["idempotency_key"], unique=True)

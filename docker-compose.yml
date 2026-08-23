@@ -1,24 +1,41 @@
 services:
-  api:
+  migrate:
     build: .
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
-    ports:
-      - "8000:8000"
+    command: alembic upgrade head
     environment:
       DATABASE_URL: postgresql+psycopg://agent:agent@db:5432/agent
     depends_on:
       db:
         condition: service_healthy
 
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@db:5432/agent
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   worker:
     build: .
-    command: sh -c "alembic upgrade head && python -m app.worker"
+    command: python -m app.worker
     environment:
       DATABASE_URL: postgresql+psycopg://agent:agent@db:5432/agent
       MAX_ATTEMPTS: 3
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   db:
     image: postgres:16-alpine

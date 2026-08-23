@@ -1,6 +1,6 @@
 [project]
 name = "agent-task-orchestrator"
-version = "1.0.0"
+version = "1.1.0"
 description = "Production-style FastAPI service demonstrating supervised and auditable agent task execution."
 requires-python = ">=3.12"
 dependencies = [
@@ -27,7 +27,7 @@ exclude = ["migrations*", "tests*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --cov=app --cov-report=term-missing"
+addopts = "-q --cov=app --cov-branch --cov-report=term-missing --cov-fail-under=85"
 
 [tool.ruff]
 line-length = 100

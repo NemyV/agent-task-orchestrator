@@ -1,97 +1,148 @@
 # Agent Task Orchestrator
 
-A production-style Python backend that demonstrates how AI/automation tasks can be submitted, approved, executed, verified and persisted safely instead of treating generated output as automatically successful.
+[![CI](https://github.com/NemyV/agent-task-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/NemyV/agent-task-orchestrator/actions/workflows/ci.yml)
 
-The service is intentionally deterministic by default: no external LLM key is required to run the project. This keeps the orchestration, persistence, state transitions and verification behavior reproducible and testable.
+A compact Python reference implementation for **supervised and auditable automated task execution**.
+It focuses on the backend engineering around agent-style workloads: persistence, idempotency,
+human approval, state transitions, bounded retries, concurrent worker safety, independent
+verification, migrations, observability endpoints and automated testing.
 
-## What this project demonstrates
+The default executor is deliberately deterministic and requires **no external AI API key**. That
+keeps orchestration behavior reproducible and makes the repository useful for testing the system
+around an agent independently from a specific model provider.
 
-- FastAPI REST API and generated OpenAPI documentation
-- Pydantic request/response validation
+## What it demonstrates
+
+- FastAPI REST API with generated OpenAPI documentation
+- Pydantic request and response validation
 - PostgreSQL persistence through SQLAlchemy 2
-- Alembic database migrations
-- Idempotent job creation backed by a database uniqueness constraint
-- Explicit lifecycle states: `waiting_confirmation -> pending -> running -> completed/failed`
-- Human confirmation before execution for sensitive tasks
-- Separate executor and verifier abstractions
-- Background worker with bounded retry attempts
-- Health, readiness and Prometheus-compatible metrics endpoints
-- Docker image and Docker Compose stack
-- pytest API coverage
+- Alembic schema migrations
+- database-backed idempotency with conflict detection
+- explicit lifecycle states: `waiting_confirmation -> pending -> running -> completed/failed`
+- idempotent human confirmation for approval-gated jobs
+- atomic execution claims to prevent duplicate execution when workers/API calls race
+- bounded retry attempts for failed jobs
+- separate executor and verifier components
+- background worker using the same domain/service layer as the API
+- health, database-readiness and Prometheus-compatible job metrics
+- non-root Docker image and Docker Compose stack
+- pytest with branch coverage threshold
 - Ruff linting and strict mypy type checking
-- GitHub Actions CI
+- GitHub Actions CI against both SQLite and PostgreSQL
+- full Docker end-to-end smoke test covering API -> PostgreSQL -> worker -> verification
 
 ## Architecture
 
 ```text
-                         +------------------+
-Client ---------------->| FastAPI / OpenAPI|
-                         +--------+---------+
-                                  |
-                                  v
-                         +------------------+
-                         |    JobService    |
-                         +---+----------+---+
-                             |          |
-                    persist  |          | execute
-                             v          v
-                    +-------------+  +-------------+
-                    | Repository  |  |  Executor   |
-                    | SQLAlchemy  |  | deterministic|
-                    +------+------+  +------+------+ 
-                           |                |
-                           v                v
-                    +-------------+  +-------------+
-                    | PostgreSQL  |  |  Verifier   |
-                    +-------------+  +-------------+
-
-Background worker polls eligible `pending` jobs and uses the same service layer.
+                           +-------------------+
+Client ------------------>| FastAPI / OpenAPI |
+                           +---------+---------+
+                                     |
+                                     v
+                           +-------------------+
+                           |    JobService     |
+                           +----+---------+----+
+                                |         |
+                       persist  |         | execute / verify
+                                v         v
+                       +-------------+  +-------------+
+                       | Repository  |  | Executor    |
+                       | SQLAlchemy  |  +------+------+ 
+                       +------+------+         |
+                              |                v
+                              |          +-------------+
+                              |          | Verifier    |
+                              |          +-------------+
+                              v
+                       +-------------+
+                       | PostgreSQL  |
+                       +-------------+
+                              ^
+                              |
+                       +-------------+
+                       | Worker      |
+                       | polling +   |
+                       | atomic claim|
+                       +-------------+
 ```
+
+A one-shot `migrate` container applies Alembic migrations before the API or worker starts. This
+avoids having multiple long-running services race to perform schema migrations.
 
 ## Job lifecycle
 
 ```text
-requires confirmation                no confirmation required
-        |                                      |
-        v                                      v
-waiting_confirmation ----------------------> pending
-        | confirm                              |
-        +--------------------------------------+ 
-                                               |
-                                               v
-                                            running
-                                            /     \
-                                           v       v
-                                     completed   failed
+requires confirmation                 no confirmation required
+        |                                       |
+        v                                       v
+waiting_confirmation ---- confirm ----------> pending
+                                                |
+                                                | atomic claim
+                                                v
+                                             running
+                                             /     \
+                                            v       v
+                                      completed   failed
+                                                    |
+                                                    | attempts < MAX_ATTEMPTS
+                                                    +---------> retry
 ```
 
-The execution result and verification result are stored separately. A worker producing output is not treated as proof that the task succeeded.
+Execution output and verification output are persisted separately. Producing output is not treated
+as proof that a task succeeded.
 
-## Run with Docker
+## Correctness details
+
+### Idempotency
+
+`POST /jobs` accepts an `idempotency_key`. Repeating the **same request** with the same key returns
+the existing job. Reusing that key for a different goal or confirmation policy returns HTTP `409`
+instead of silently treating two different operations as equivalent.
+
+The application checks the key first, while the database uniqueness constraint remains the final
+consistency boundary for concurrent requests.
+
+### Concurrent execution
+
+A candidate job is claimed with a conditional database `UPDATE` that changes an eligible
+`pending`/`failed` job to `running` while incrementing its attempt count. If multiple workers, or a
+worker and direct API execution, race for the same job, only one claim can succeed.
+
+### Retries
+
+Failed jobs remain eligible while `attempts < MAX_ATTEMPTS`. Every claim increments the persisted
+attempt counter before execution, so crashes/failures cannot bypass the retry bound.
+
+### Human approval
+
+Jobs may start in `waiting_confirmation`. Confirmation is persisted and idempotent: retrying a
+successful confirmation request is safe. An unconfirmed job cannot be claimed for execution.
+
+## Run the complete stack
 
 ```bash
 docker compose up --build
 ```
 
-The stack starts:
+The stack contains:
 
+- `migrate` — one-shot Alembic migration service
 - `api` — FastAPI service on port `8000`
 - `worker` — background task worker
 - `db` — PostgreSQL 16
 
-Database migrations run automatically when the API and worker containers start.
-
 Useful endpoints:
 
-- API root/docs: `http://localhost:8000/docs`
-- OpenAPI schema: `http://localhost:8000/openapi.json`
-- Health: `http://localhost:8000/health`
-- Readiness/database check: `http://localhost:8000/ready`
-- Metrics: `http://localhost:8000/metrics`
+- `http://localhost:8000/` — service metadata
+- `http://localhost:8000/docs` — Swagger/OpenAPI UI
+- `http://localhost:8000/openapi.json` — OpenAPI schema
+- `http://localhost:8000/health` — process liveness
+- `http://localhost:8000/ready` — database readiness
+- `http://localhost:8000/metrics` — Prometheus-compatible status counts
 
 ## Demo
 
-Create a job that requires human approval:
+Create an approval-gated job:
 
 ```bash
 curl -s -X POST http://localhost:8000/jobs \
@@ -99,11 +150,9 @@ curl -s -X POST http://localhost:8000/jobs \
   -d '{
     "goal": "Summarize repository changes and verify the output",
     "requires_confirmation": true,
-    "idempotency_key": "portfolio-demo-0001"
+    "idempotency_key": "demo-request-0001"
   }'
 ```
-
-The job is stored as `waiting_confirmation`. Repeating the same request with the same idempotency key returns the existing job instead of inserting a duplicate.
 
 Confirm it:
 
@@ -111,7 +160,7 @@ Confirm it:
 curl -s -X POST http://localhost:8000/jobs/<JOB_ID>/confirm
 ```
 
-The job becomes `pending`. The worker can then execute it automatically, or it can be run directly for demonstration:
+The background worker can now claim and execute it. You can also trigger execution directly:
 
 ```bash
 curl -s -X POST http://localhost:8000/jobs/<JOB_ID>/run
@@ -129,6 +178,7 @@ curl -s http://localhost:8000/jobs/<JOB_ID>
 python -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev]'
+cp .env.example .env
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
@@ -139,9 +189,12 @@ In another terminal:
 python -m app.worker
 ```
 
-Without `DATABASE_URL`, local development defaults to SQLite. Docker Compose configures PostgreSQL automatically.
+The sample `.env.example` uses SQLite for a zero-setup development path. Docker Compose uses
+PostgreSQL automatically.
 
-## Quality checks
+## Quality gates
+
+Run locally:
 
 ```bash
 ruff check .
@@ -149,29 +202,45 @@ mypy app
 pytest
 ```
 
-The same checks run in GitHub Actions on pushes and pull requests.
+CI performs three independent checks:
 
-## Why these design choices?
+1. **Quality / SQLite** — linting, strict type checking and the complete test suite.
+2. **PostgreSQL integration** — Alembic upgrade/check/downgrade/upgrade round trip plus tests against PostgreSQL 16.
+3. **Docker smoke test** — builds the real images, starts the Compose stack, submits a job through HTTP and waits for the background worker to persist a verified completion.
+
+The test suite enforces branch coverage of at least **85%**.
+
+## Engineering choices
 
 ### Deterministic executor first
-Agent infrastructure is easier to test when orchestration does not depend on a nondeterministic external model. The executor interface is intentionally replaceable, so an LLM/tool-calling implementation can be added without rewriting job lifecycle logic.
+
+The orchestration layer can be validated without network access, API keys, model cost or
+nondeterministic responses. A real LLM/tool-calling executor can replace the deterministic executor
+without changing persistence or lifecycle rules.
 
 ### Verification is independent
-Execution and acceptance are different concerns. Keeping a verifier separate allows deterministic policy checks, schema validation, test execution, a second-model review or other acceptance strategies later.
 
-### Database-backed idempotency
-Duplicate HTTP requests and retries are normal. The service checks the idempotency key and PostgreSQL enforces uniqueness as a final consistency boundary.
-
-### Human approval is a state transition
-Confirmation is represented explicitly rather than as a UI-only concept. A sensitive job cannot execute until the persisted state records approval.
+Execution and acceptance are separate responsibilities. The verifier boundary can later host schema
+checks, policy validation, test execution, a second-model review or another acceptance strategy.
 
 ### Thin HTTP layer
-FastAPI handlers translate HTTP concerns. Lifecycle and orchestration rules remain in `JobService`, which is shared by the API and background worker.
+
+FastAPI handlers translate HTTP concerns. Lifecycle and orchestration rules live in `JobService`,
+which is shared by the API and worker.
+
+### Database as the consistency boundary
+
+Uniqueness and atomic conditional updates provide correctness even when multiple application
+processes operate concurrently. Process-local locks would not provide that guarantee.
 
 ## Main technologies
 
-Python 3.12 · FastAPI · Pydantic · SQLAlchemy · PostgreSQL · Alembic · Docker Compose · pytest · mypy · Ruff · GitHub Actions
+Python 3.12 · FastAPI · Pydantic · SQLAlchemy 2 · PostgreSQL · Alembic · Docker Compose · pytest · mypy · Ruff · GitHub Actions
 
-## Possible extensions
+## Deliberate scope
 
-The project is intentionally small enough to review quickly. Natural production extensions would include row-level worker leasing for multi-worker concurrency, Redis/RabbitMQ for queue transport, OpenTelemetry traces, authentication/authorization and a real tool-calling LLM executor.
+This repository demonstrates orchestration/backend mechanics rather than pretending to be a full
+hosted AI platform. It intentionally does **not** include authentication/authorization, a distributed
+message broker, a real external LLM integration, OpenTelemetry tracing or multi-tenant isolation.
+Those would be natural next steps for a deployed product, but are not required to demonstrate the
+core correctness model here.
