@@ -104,16 +104,39 @@ def test_job_without_confirmation_can_run_immediately() -> None:
     assert run.json()["result"].startswith("Executed bounded task:")
 
 
-def test_input_validation_rejects_short_goal_and_key() -> None:
-    response = client.post(
+def test_input_validation_trims_text_and_rejects_invalid_payloads() -> None:
+    created = client.post(
         "/jobs",
         json={
-            "goal": "no",
+            "goal": "   A valid normalized task   ",
             "requires_confirmation": False,
-            "idempotency_key": "short",
+            "idempotency_key": "   normalized-key-0001   ",
         },
     )
-    assert response.status_code == 422
+    assert created.status_code == 201
+    assert created.json()["goal"] == "A valid normalized task"
+    assert created.json()["idempotency_key"] == "normalized-key-0001"
+
+    whitespace_only = client.post(
+        "/jobs",
+        json={
+            "goal": "     ",
+            "requires_confirmation": False,
+            "idempotency_key": "valid-key-0001",
+        },
+    )
+    unknown_field = client.post(
+        "/jobs",
+        json={
+            "goal": "A valid task",
+            "requires_confirmation": False,
+            "idempotency_key": "valid-key-0002",
+            "unexpected": "value",
+        },
+    )
+
+    assert whitespace_only.status_code == 422
+    assert unknown_field.status_code == 422
 
 
 def test_missing_job_returns_404() -> None:
