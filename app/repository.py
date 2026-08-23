@@ -52,6 +52,8 @@ class JobRepository:
             .values(
                 status="running",
                 attempts=JobRow.attempts + 1,
+                result=None,
+                verification=None,
                 error=None,
             )
             .returning(JobRow)
