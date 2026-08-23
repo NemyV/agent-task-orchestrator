@@ -63,7 +63,11 @@ class JobService:
         row.confirmed = True
         row.status = JobStatus.pending.value
         saved = self.repo.save(row)
-        return ConfirmationRead(id=saved.id, confirmed=saved.confirmed, status=JobStatus(saved.status))
+        return ConfirmationRead(
+            id=saved.id,
+            confirmed=saved.confirmed,
+            status=JobStatus(saved.status),
+        )
 
     def run(self, job_id: str) -> JobRead:
         row = self.repo.get(job_id)
