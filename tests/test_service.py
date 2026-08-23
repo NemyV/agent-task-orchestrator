@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import pytest
 from sqlalchemy.orm import Session
 
@@ -6,6 +8,7 @@ from app.executor import DeterministicExecutor
 from app.models import JobCreate, JobStatus
 from app.repository import JobRepository
 from app.service import InvalidTransitionError, JobService
+from app.verifier import DeterministicVerifier
 from app.worker import run_once
 
 
@@ -78,6 +81,44 @@ def test_repository_claim_is_single_winner() -> None:
         assert first_claim.status == JobStatus.running.value
         assert first_claim.attempts == 1
         assert second_claim is None
+
+
+def test_repository_duplicate_insert_returns_existing_row() -> None:
+    with SessionLocal() as session:
+        repo = JobRepository(session)
+        original = JobRow(
+            id=str(uuid4()),
+            goal="Original request",
+            status=JobStatus.pending.value,
+            requires_confirmation=False,
+            confirmed=True,
+            idempotency_key="repository-key-0001",
+        )
+        saved = repo.add(original)
+        duplicate = JobRow(
+            id=str(uuid4()),
+            goal="Concurrent duplicate request",
+            status=JobStatus.pending.value,
+            requires_confirmation=False,
+            confirmed=True,
+            idempotency_key="repository-key-0001",
+        )
+
+        winner = repo.add(duplicate)
+        assert winner.id == saved.id
+        assert winner.goal == "Original request"
+
+
+def test_verifier_rejects_empty_and_unbounded_output() -> None:
+    verifier = DeterministicVerifier()
+
+    empty = verifier.verify("Expected bounded goal", "")
+    wrong_goal = verifier.verify("Expected bounded goal", "Executed something else")
+
+    assert empty.passed is False
+    assert "no output" in empty.message
+    assert wrong_goal.passed is False
+    assert "bounded goal" in wrong_goal.message
 
 
 def test_background_worker_processes_runnable_job() -> None:
