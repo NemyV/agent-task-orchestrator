@@ -111,7 +111,8 @@ worker and direct API execution, race for the same job, only one claim can succe
 ### Retries
 
 Failed jobs remain eligible while `attempts < MAX_ATTEMPTS`. Every claim increments the persisted
-attempt counter before execution, so crashes/failures cannot bypass the retry bound.
+attempt counter before execution. A new attempt clears the previous result, verification and error
+fields so stale output cannot be mistaken for the current attempt.
 
 ### Human approval
 
@@ -230,8 +231,8 @@ which is shared by the API and worker.
 
 ### Database as the consistency boundary
 
-Uniqueness and atomic conditional updates provide correctness even when multiple application
-processes operate concurrently. Process-local locks would not provide that guarantee.
+Uniqueness and atomic conditional updates provide correctness when multiple application processes
+try to claim the same runnable job. Process-local locks would not provide that guarantee.
 
 ## Main technologies
 
@@ -242,5 +243,8 @@ Python 3.12 · FastAPI · Pydantic · SQLAlchemy 2 · PostgreSQL · Alembic · D
 This repository demonstrates orchestration/backend mechanics rather than pretending to be a full
 hosted AI platform. It intentionally does **not** include authentication/authorization, a distributed
 message broker, a real external LLM integration, OpenTelemetry tracing or multi-tenant isolation.
-Those would be natural next steps for a deployed product, but are not required to demonstrate the
-core correctness model here.
+It also does not implement worker leases/heartbeats: if a worker process terminates after a job is
+claimed and persisted as `running`, that job requires operational reconciliation. A deployed system
+would normally use a queue visibility timeout or a renewable database lease to recover abandoned
+work safely. These boundaries are explicit so the repository demonstrates what it actually proves
+without presenting a small reference service as a complete production platform.

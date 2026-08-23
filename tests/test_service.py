@@ -83,6 +83,26 @@ def test_repository_claim_is_single_winner() -> None:
         assert second_claim is None
 
 
+def test_retry_claim_clears_previous_attempt_output() -> None:
+    with SessionLocal() as session:
+        job_id = create_runnable_job(session, key="service-key-0005")
+        repo = JobRepository(session)
+        row = repo.get(job_id)
+        assert row is not None
+        row.status = JobStatus.failed.value
+        row.result = "stale output"
+        row.verification = "stale verification"
+        row.error = "stale error"
+        repo.save(row)
+
+        claimed = repo.claim_for_execution(job_id, max_attempts=3)
+        assert claimed is not None
+        assert claimed.status == JobStatus.running.value
+        assert claimed.result is None
+        assert claimed.verification is None
+        assert claimed.error is None
+
+
 def test_repository_duplicate_insert_returns_existing_row() -> None:
     with SessionLocal() as session:
         repo = JobRepository(session)
