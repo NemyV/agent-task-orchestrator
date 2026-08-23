@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -35,11 +35,46 @@ class JobRepository:
         self.session.refresh(row)
         return row
 
-    def list_pending(self, limit: int = 20) -> list[JobRow]:
+    def claim_for_execution(self, job_id: str, max_attempts: int) -> JobRow | None:
+        """Atomically move one runnable job to ``running`` and increment its attempt count.
+
+        The conditional UPDATE is the concurrency boundary: if two API/worker processes race for
+        the same job, only one can change an eligible row. PostgreSQL re-checks the predicate after
+        waiting on the row lock, so the loser observes zero updated rows instead of double-running.
+        """
         statement = (
-            select(JobRow)
-            .where(JobRow.status == "pending")
-            .order_by(JobRow.created_at.asc())
+            update(JobRow)
+            .where(
+                JobRow.id == job_id,
+                JobRow.status.in_(["pending", "failed"]),
+                JobRow.attempts < max_attempts,
+            )
+            .values(
+                status="running",
+                attempts=JobRow.attempts + 1,
+                error=None,
+            )
+            .returning(JobRow)
+        )
+        claimed = self.session.scalars(statement).one_or_none()
+        if claimed is None:
+            self.session.rollback()
+            return None
+        self.session.commit()
+        return claimed
+
+    def list_runnable_ids(self, max_attempts: int, limit: int = 20) -> list[str]:
+        statement = (
+            select(JobRow.id)
+            .where(
+                JobRow.status.in_(["pending", "failed"]),
+                JobRow.attempts < max_attempts,
+            )
+            .order_by(JobRow.updated_at.asc(), JobRow.created_at.asc())
             .limit(limit)
         )
         return list(self.session.scalars(statement))
+
+    def status_counts(self) -> dict[str, int]:
+        statement = select(JobRow.status, func.count(JobRow.id)).group_by(JobRow.status)
+        return {status: count for status, count in self.session.execute(statement)}
